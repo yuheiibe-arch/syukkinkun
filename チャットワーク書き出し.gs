@@ -5,11 +5,14 @@ const CHATWORK_FIXED_MENTION_PERSON = "Gibranさん";
 const CHATWORK_POST_ROOM_ID = '49055690'; 
 const CHATWORK_API_TOKEN = PropertiesService.getScriptProperties().getProperty('CHATWORK_API_TOKEN');
 
+// ★休日退勤連絡の稼働スイッチ（false: 保留・スキップ中 / true: 本番稼働）
+var ENABLE_HOLIDAY_LEAVE_NOTIFICATION = false;
+
 // 休日退勤連絡用の設定
-const LEAVE_MASTER_SPREADSHEET_ID = '1yj4dG9BzNnUU85C-CdYCwPXougm4XJv3cC2JxwMacK0';
-const LEAVE_SENT_DATE_PROP_KEY = 'LAST_HOLIDAY_LEAVE_SENT_DATE';
-const LEAVE_EXCLUDED_SHEETS = ["祝日", "土日祝業務内容", "参考1", "シフト構成パターン（小谷編集中）", "メンバーTODO", "携帯番号"];
-const LEAVE_NON_WORK_STRINGS = ["休", "有給", "0", ""];
+var LEAVE_MASTER_SPREADSHEET_ID = '1yj4dG9BzNnUU85C-CdYCwPXougm4XJv3cC2JxwMacK0';
+var LEAVE_SENT_DATE_PROP_KEY = 'LAST_HOLIDAY_LEAVE_SENT_DATE';
+var LEAVE_EXCLUDED_SHEETS = ["祝日", "土日祝業務内容", "参考1", "シフト構成パターン（小谷編集中）", "メンバーTODO", "携帯番号"];
+var LEAVE_NON_WORK_STRINGS = ["休", "有給", "0", ""];
 
 /**
  * 【休日朝の当番通知】
@@ -154,15 +157,21 @@ function sendMessageToChatworkAPI_internal(roomId, message) {
 }
 
 // ============================================================================
-// === 【追加機能】土日祝・年末年始の退勤連絡（15分おき固定トリガー監視用） ===
+// === 【保留中】土日祝・年末年始の退勤連絡（機構保持・現在スキップ設定） ===
 // ============================================================================
 
 /**
  * 【トリガー設定用：15分おき実行】
- * 土日祝・年末年始において、本日のDS部勤務者全員の退勤時刻を過ぎたら1日1回Chatworkへ通知します。
- * （動的トリガーは一切生成しないため、トリガーが増殖することはありません）
+ * ※現在は ENABLE_HOLIDAY_LEAVE_NOTIFICATION = false のため即スキップされます。
+ * 再開する場合はファイル上部の ENABLE_HOLIDAY_LEAVE_NOTIFICATION を true に変更してください。
  */
 function checkAndSendHolidayLeaveNotification() {
+  // 0. 保留（無効化）スイッチによるスキップ
+  if (!ENABLE_HOLIDAY_LEAVE_NOTIFICATION) {
+    Logger.log('現在、休日退勤連絡は保留設定（ENABLE_HOLIDAY_LEAVE_NOTIFICATION = false）のためスキップしました。');
+    return;
+  }
+
   const now = new Date();
 
   // 1. 早朝ガード（8時前は即終了）
@@ -238,6 +247,7 @@ function test_previewHolidayLeaveNotification() {
   const isHol = isHoliday_common(now);
   const dutyList = getTodayShiftsForLeave_internal(now);
 
+  Logger.log(`稼働スイッチ(ENABLE_HOLIDAY_LEAVE_NOTIFICATION): ${ENABLE_HOLIDAY_LEAVE_NOTIFICATION}`);
   Logger.log(`本日休日判定: ${isHol}`);
   if (dutyList.length === 0) {
     Logger.log('本日の勤務者: 0名（終日不在のため送信対象外）');
@@ -259,8 +269,8 @@ function buildHolidayLeaveMessage_internal(dutyList) {
     + `＜本日の勤務者＞\n`
     + `${memberLines}\n`
     + `ドクターサポート部の勤務者退勤時刻となります。\n`
-    + `以降の緊急連絡についてはギブランさんメンションをお願いします。\n`
-    + `業務連絡はメンション不要で構いません。\n`
+    + `以降の緊急連絡については[To:8440783]Gibran ~RGS~さんにメンションをお願いします。\n`
+    + `遅刻、残業申請の連絡について、フォーム確認いたしますので、ご連絡不要です。\n`
     + `引き続き何卒よろしくお願い申し上げます。[/info]`;
 }
 
