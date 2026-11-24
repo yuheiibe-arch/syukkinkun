@@ -3,10 +3,10 @@ const MASTER_SPREADSHEET_ID_SLACK = '1yj4dG9BzNnUU85C-CdYCwPXougm4XJv3cC2JxwMacK
 const OUTPUT_SPREADSHEET_ID_SLACK = '1bKbpLbiDZ7V_pDgnUcRApiSA9jEIQ05Q6Msd1AIi3IU'; 
 const MENTION_SHEET_NAME_SLACK = '追加メンション';
 
-// ★修正：スクリカプトプロパティから取得するように変更
+// スクリプトプロパティから取得
 const SLACK_WEBHOOK_URL = PropertiesService.getScriptProperties().getProperty('SLACK_WEBHOOK_URL'); 
 
-// ★追加：Slackの送信先チャンネルID
+// Slackの送信先チャンネルID（Legacy Webhookによる上書き指定用）
 const SLACK_CHANNEL_ID = 'C0A0RK9M8T1';
 
 const EXCLUDED_SHEET_NAMES_SLACK = ["祝日", "土日祝業務内容", "参考1", "シフト構成パターン（小谷編集中）", "メンバーTODO", "携帯番号"];
@@ -40,7 +40,7 @@ function main_sendTomorrowShiftToSlack() {
 
 function postToSlackWebhook_internal(text) {
   const payload = {
-    channel: SLACK_CHANNEL_ID, // ★修正: チャンネルIDを明示的に指定して投稿先を固定
+    channel: SLACK_CHANNEL_ID, // チャンネルIDを明示的に指定して投稿先を固定
     text: text
   };
 
@@ -109,7 +109,7 @@ function generateMessage_Webhook() {
     return `${item.name}さん：${formattedTime}`;
   }).join("\n");
 
-  // ★修正：コードブロック（```）でリストを囲む
+  // リストをコードブロック（```）で囲む
   return `${titleLine}\n\n\`\`\`\n${listText}\n\`\`\`\n\n${closingText}\n\n${slackMention}`;
 }
 
