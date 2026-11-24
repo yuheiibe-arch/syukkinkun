@@ -6,7 +6,7 @@ const EXCLUDED_SHEET_NAMES = ["祝日", "土日祝業務内容", "参考1", "シ
 const NON_WORK_STRINGS = ["休", "有給"];
 
 /**
- * シフト表から今日の勤務者を抽出し、「DS部」シートを更新します。
+ * シフト表から今日の勤務者と勤務時間を抽出し、「DS部」シートを更新します。
  */
 function updateTodaysWorkList() {
   const today = new Date();
@@ -24,8 +24,8 @@ function updateTodaysWorkList() {
   }
   Logger.log(`シート「${targetSheet.getName()}」を処理します。`);
     
-  const workingNames = extractWorkingNames_internal(targetSheet, currentDay, currentMonth);
-  writeToDestinationSheet_internal(workingNames, dateStringToWrite);
+  const workingStaffList = extractWorkingNames_internal(targetSheet, currentDay, currentMonth);
+  writeToDestinationSheet_internal(workingStaffList, dateStringToWrite);
   Logger.log(`「${DEST_SHEET_NAME_FOR_SHIFT}」シートへの書き込みが完了しました。`);
 }
 
@@ -46,7 +46,7 @@ function findTargetSheet_internal(currentYYMM) {
 }
 
 /**
- * [追加] A列から「除外」を探し、その次の行番号を返す関数（動的スタート）
+ * A列から「除外」を探し、その次の行番号を返す関数（動的スタート）
  */
 function findDataStartRow_internal(sheet) {
   const lastRow = sheet.getLastRow();
@@ -62,15 +62,11 @@ function findDataStartRow_internal(sheet) {
 }
 
 /**
- * [修正版] シフトシートから勤務者を抽出します。
- * ★開始行を動的取得に変更
- * ★集計行（氏名が「時間」や数字）に到達したら読み込みを終了する処理を追加
+ * シフトシートから勤務者と勤務時間を抽出し、開始時間順で返します。
  */
 function extractWorkingNames_internal(sheet, currentDay, currentMonth) {
-  const names = [];
+  const staffList = [];
   const headerRow = 10;
-  
-  // ▼ 変更箇所: 開始行を動的に取得
   const dataStartRow = findDataStartRow_internal(sheet);
   
   const DATE_START_COLUMN = 9;  // I列
@@ -120,24 +116,36 @@ function extractWorkingNames_internal(sheet, currentDay, currentMonth) {
 
     const name = rowData[nameColumnIndex]?.trim() || "";
     
-    // ▼ 変更箇所: 集計行（「時間」「合計」や数字のみのセル）に到達したらループを強制終了
+    // 集計行（「時間」「合計」や数字のみのセル）に到達したらループを強制終了
     if (name === "時間" || name === "合計" || /^\d+$/.test(name)) {
       break; 
     }
 
-    // 途中の空行はスキップ
     if (!name) continue;
 
     const shift = rowData[todayColumnIndex]?.trim() || "";
     
     if (shift && shift !== '0' && !NON_WORK_STRINGS.includes(shift) && /\d/.test(shift)) {
-      names.push(name);
+      const parsed = parseShiftTime_common(shift);
+      staffList.push({
+        name: name,
+        time: parsed ? parsed.formattedTime : shift,
+        startMinutes: parsed ? parsed.startMinutes : 9999,
+        endMinutes: parsed ? parsed.endMinutes : 0
+      });
     }
   }
-  return names;
+
+  // 開始時間順（同じなら終了時間順）でソート
+  staffList.sort((a, b) => {
+    if (a.startMinutes !== b.startMinutes) return a.startMinutes - b.startMinutes;
+    return a.endMinutes - b.endMinutes;
+  });
+
+  return staffList;
 }
 
-function writeToDestinationSheet_internal(names, dateString) {
+function writeToDestinationSheet_internal(staffList, dateString) {
   const destSpreadsheet = SpreadsheetApp.openById(DESTINATION_SPREADSHEET_ID_FOR_SHIFT);
   const destSheet = destSpreadsheet.getSheetByName(DEST_SHEET_NAME_FOR_SHIFT);
   if (!destSheet) {
@@ -151,14 +159,14 @@ function writeToDestinationSheet_internal(names, dateString) {
   
   destSheet.getRange("A1").setValue("日付");
   destSheet.getRange("B1").setValue("DS部勤務者");
+  destSheet.getRange("C1").setValue("勤務時間");
 
-  if (names && names.length > 0) {
-    const valuesToWrite = names.map(name => [dateString, name]);
-    destSheet.getRange(2, 1, valuesToWrite.length, 2).setValues(valuesToWrite);
-    Logger.log(`${names.length}名の勤務者を書き込みました: ${names.join(', ')}`);
+  if (staffList && staffList.length > 0) {
+    const valuesToWrite = staffList.map(item => [dateString, item.name, item.time]);
+    destSheet.getRange(2, 1, valuesToWrite.length, 3).setValues(valuesToWrite);
+    Logger.log(`${staffList.length}名の勤務者を書き込みました: ${staffList.map(s => `${s.name}(${s.time})`).join(', ')}`);
   } else {
-    destSheet.getRange("A2").setValue(dateString);
-    destSheet.getRange("B2").setValue("不在");
+    destSheet.getRange("A2:C2").setValues([[dateString, "不在", ""]]);
     Logger.log(`本日の勤務者はいませんでした。「不在」と書き込みました。`);
   }
 }

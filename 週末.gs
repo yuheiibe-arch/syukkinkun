@@ -3,9 +3,6 @@ const MASTER_SPREADSHEET_ID = '1yj4dG9BzNnUU85C-CdYCwPXougm4XJv3cC2JxwMacK0';
 const OUTPUT_SPREADSHEET_ID = '1bKbpLbiDZ7V_pDgnUcRApiSA9jEIQ05Q6Msd1AIi3IU'; 
 const OUTPUT_SHEET_NAME = '週末勤務者';
 
-// カレンダー（スケジュール表）のID
-const CALENDAR_SPREADSHEET_ID = '1WlmirSDOPnIcV2cwY5ClXkMWBFMM-4zrAw4XFDNUPGw';
-
 // Chatwork投稿用の設定
 const CW_ROOM_ID = '325431839'; 
 const CW_API_TOKEN = PropertiesService.getScriptProperties().getProperty('CHATWORK_API_TOKEN');
@@ -13,21 +10,15 @@ const CW_API_TOKEN = PropertiesService.getScriptProperties().getProperty('CHATWO
 const MASTER_EXCLUDED_SHEET_NAMES = ["祝日", "土日祝業務内容", "参考1", "シフト構成パターン（小谷編集中）", "メンバーTODO", "携帯番号"];
 const MASTER_NON_WORK_SET = new Set(["休", "有給", "0", ""]); 
 
-// === 年末年始の設定（ハードコード） ===
-const YEAR_END_START_MONTH = 12;
-const YEAR_END_START_DAY = 29;
-const YEAR_END_END_MONTH = 1;
-const YEAR_END_END_DAY = 3;
-
 /**
  * [メイン関数] 週末・連休の勤務体制メッセージを生成し、シート書き出し＆Chatwork投稿します。
- * トリガー：毎日実行（明日が平日の場合は自動でスキップされます）
+ * トリガー：毎日実行（連休前の最終平日のみ発火し、通常平日や連休中は自動でスキップされます）
  */
 function generateAndPostWeekendDutyMessage() {
   const upcomingHolidays = getUpcomingHolidaysFromCalendar_internal();
   
   if (upcomingHolidays.length === 0) {
-    Logger.log('明日は平日（または休日データなし）のため、処理をスキップします。');
+    Logger.log('連休前日ではないため、処理をスキップします。');
     return;
   }
   
@@ -57,77 +48,27 @@ function generateAndPostWeekendDutyMessage() {
   postToChatwork_internal(CW_ROOM_ID, finalChatMessage);
 }
 
-// --- ▼▼▼ カレンダー連動 ＆ 年末年始ロジック ▼▼▼ ---
-
-function isYearEndHoliday_internal(date) {
-    const month = date.getMonth() + 1;
-    const day = date.getDate();
-
-    // 12月29日～12月31日
-    if (month === YEAR_END_START_MONTH && day >= YEAR_END_START_DAY && day <= 31) {
-        return true;
-    }
-    // 1月1日～1月3日
-    if (month === YEAR_END_END_MONTH && day >= 1 && day <= YEAR_END_END_DAY) {
-        return true;
-    }
-    return false;
-}
+// --- ▼▼▼ 内閣府CSV連動 ＆ 年末年始ロジック ▼▼▼ ---
 
 function getUpcomingHolidaysFromCalendar_internal() {
+  const holidayMap = getCaoHolidayMap_common(false);
   const today = new Date();
-  const tomorrow = new Date(today);
-  tomorrow.setDate(today.getDate() + 1);
 
-  const year = tomorrow.getFullYear();
-  const month = tomorrow.getMonth() + 1;
-  const fiscalYear = month <= 3 ? year - 1 : year; 
-  const sheetName = `${fiscalYear}年度`;
-  
-  const ss = SpreadsheetApp.openById(CALENDAR_SPREADSHEET_ID);
-  const sheet = ss.getSheetByName(sheetName);
-  if (!sheet) return [];
-
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 3) return [];
-  
-  const data = sheet.getRange(3, 1, lastRow - 2, 3).getValues();
-  const targetDateStr = Utilities.formatDate(tomorrow, 'JST', 'yyyy/MM/dd');
-  let startIndex = -1;
-  
-  for (let i = 0; i < data.length; i++) {
-    const cellDate = data[i][0];
-    if (!cellDate) continue; 
-    
-    const cellDateStr = cellDate instanceof Date 
-        ? Utilities.formatDate(cellDate, 'JST', 'yyyy/MM/dd') 
-        : Utilities.formatDate(new Date(cellDate), 'JST', 'yyyy/MM/dd');
-
-    if (cellDateStr === targetDateStr) {
-      startIndex = i;
-      break;
-    }
+  // 本日がすでに休日の場合は連休中のためスキップ（連休前の最終平日のみ通知する）
+  if (isHoliday_common(today, holidayMap)) {
+    return [];
   }
 
-  if (startIndex === -1) return []; 
-
   const holidayDates = [];
-  
-  // 明日を起点に、連続する休日を取得
-  for (let i = startIndex; i < data.length; i++) {
-    const dateVal = data[i][0];
-    if (!dateVal) continue;
-    
-    const checkDate = new Date(dateVal);
-    const isYearEnd = isYearEndHoliday_internal(checkDate);
-    const isCalendarWeekday = data[i][2] === "平日";
+  const checkDate = new Date(today);
 
-    // 「年末年始の期間ではない」かつ「カレンダーが平日」なら連休終了
-    if (!isYearEnd && isCalendarWeekday) {
-      break; 
+  // 明日を起点に、連続する休日（土日・内閣府祝日・年末年始）を取得
+  for (let i = 0; i < 30; i++) {
+    checkDate.setDate(checkDate.getDate() + 1);
+    if (!isHoliday_common(checkDate, holidayMap)) {
+      break;
     }
-    
-    holidayDates.push(checkDate);
+    holidayDates.push(new Date(checkDate));
   }
   
   return holidayDates;
@@ -195,7 +136,6 @@ function findShiftSheet_internal(spreadsheet, yymm) {
   });
 }
 
-// ★追加：データ開始行の動的検索（A列の「除外」の次）
 function findDataStartRow_weekend(sheet) {
   const lastRow = sheet.getLastRow();
   if (lastRow < 1) return 13;
@@ -211,8 +151,6 @@ function findDataStartRow_weekend(sheet) {
 function extractNamesForDate_internal(sheet, targetDay, targetMonth) {
   const names = [];
   const headerRow = 10;
-  
-  // ★修正: 固定の13行目から動的取得に変更
   const dataStartRow = findDataStartRow_weekend(sheet);
   
   const DATE_START_COLUMN = 9; 
@@ -255,14 +193,11 @@ function extractNamesForDate_internal(sheet, targetDay, targetMonth) {
     if (rowData[0].toString().toUpperCase() === 'TRUE') continue; 
 
     const name = rowData[nameColumnIndex]?.trim() || '';
-    
-    // ★追加: 集計行（「時間」「合計」や数字）に到達したら読み込み終了
     if (name === "時間" || name === "合計" || /^\d+$/.test(name)) {
       break; 
     }
 
     const shift = rowData[dateColumnIndex]?.trim() || '';
-    
     if (name && shift && !MASTER_NON_WORK_SET.has(shift) && /\d/.test(shift)) {
       names.push(name);
     }
